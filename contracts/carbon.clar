@@ -13,6 +13,7 @@
 (define-constant ERR-CREDIT-ALREADY-RETIRED (err u105))
 (define-constant ERR-INVALID-AMOUNT (err u106))
 (define-constant ERR-INVALID-VERIFICATION-DATA (err u107))
+(define-constant ERR-INVALID-INPUT (err u108))
 
 ;; Data structures
 
@@ -66,6 +67,21 @@
   }
 )
 
+;; Validation helpers
+(define-private (is-valid-string-ascii (value (string-ascii 256)) (max-length uint))
+  (and 
+    (<= (len value) max-length)
+    (> (len value) u0)
+  )
+)
+
+(define-private (is-valid-string-utf8 (value (string-utf8 512)) (max-length uint))
+  (and 
+    (<= (len value) max-length)
+    (> (len value) u0)
+  )
+)
+
 ;; Public function to register a new carbon offset project
 (define-public (register-project 
   (project-id (string-ascii 32))
@@ -78,11 +94,21 @@
   (total-credits uint))
   (let
     ((existing-project (map-get? projects { project-id: project-id })))
+    
+    ;; Authorization and validation checks
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
     (asserts! (is-none existing-project) ERR-PROJECT-EXISTS)
     (asserts! (> total-credits u0) ERR-INVALID-AMOUNT)
     (asserts! (< start-time end-time) ERR-INVALID-AMOUNT)
     
+    ;; Validate string inputs
+    (asserts! (is-valid-string-ascii project-id u32) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii name u64) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-utf8 description u256) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii location u64) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii methodology u32) ERR-INVALID-INPUT)
+    
+    ;; Safe to use inputs after validation
     (map-set projects
       { project-id: project-id }
       {
@@ -118,10 +144,17 @@
     ((project (unwrap! (map-get? projects { project-id: project-id }) ERR-PROJECT-NOT-FOUND))
      (current-time (default-to u0 (get-block-info? time (- block-height u1)))))
     
+    ;; Authorization and validation checks
     (asserts! (is-authorized-verifier tx-sender) ERR-NOT-AUTHORIZED)
     (asserts! (>= current-time (get start-time project)) ERR-INVALID-VERIFICATION-DATA)
     (asserts! (<= current-time (get end-time project)) ERR-INVALID-VERIFICATION-DATA)
     (asserts! (> emissions-reduced u0) ERR-INVALID-VERIFICATION-DATA)
+    
+    ;; Validate string inputs
+    (asserts! (is-valid-string-ascii project-id u32) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii verification-id u32) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii methodology-version u16) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii verification-report-url u128) ERR-INVALID-INPUT)
     
     ;; Store verification record
     (map-set verification-records
@@ -170,11 +203,12 @@
     ((project (unwrap! (map-get? projects { project-id: project-id }) ERR-PROJECT-NOT-FOUND))
      (current-balance (default-to { amount: u0 } (map-get? credit-balances { project-id: project-id, owner: recipient }))))
     
-    ;; Check authorization and verification status
+    ;; Authorization and validation checks
     (asserts! (is-eq tx-sender (get owner project)) ERR-NOT-AUTHORIZED)
     (asserts! (get verification-status project) ERR-VERIFICATION-FAILED)
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
     (asserts! (<= amount (get available-credits project)) ERR-INSUFFICIENT-CREDITS)
+    (asserts! (is-valid-string-ascii project-id u32) ERR-INVALID-INPUT)
     
     ;; Update balances
     (map-set credit-balances
@@ -211,8 +245,10 @@
     ((sender-balance (unwrap! (map-get? credit-balances { project-id: project-id, owner: tx-sender }) ERR-INSUFFICIENT-CREDITS))
      (recipient-balance (default-to { amount: u0 } (map-get? credit-balances { project-id: project-id, owner: recipient }))))
     
+    ;; Validation checks
     (asserts! (>= (get amount sender-balance) amount) ERR-INSUFFICIENT-CREDITS)
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (is-valid-string-ascii project-id u32) ERR-INVALID-INPUT)
     
     ;; Update sender balance
     (map-set credit-balances
@@ -251,9 +287,13 @@
      (current-time (default-to u0 (get-block-info? time (- block-height u1))))
      (existing-retirement (map-get? retired-credits { project-id: project-id, retirement-id: retirement-id })))
     
+    ;; Validation checks
     (asserts! (is-none existing-retirement) ERR-CREDIT-ALREADY-RETIRED)
     (asserts! (>= (get amount sender-balance) amount) ERR-INSUFFICIENT-CREDITS)
     (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (is-valid-string-ascii project-id u32) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-ascii retirement-id u32) ERR-INVALID-INPUT)
+    (asserts! (is-valid-string-utf8 retirement-reason u128) ERR-INVALID-INPUT)
     
     ;; Update sender balance
     (map-set credit-balances
@@ -301,6 +341,7 @@
 (define-public (add-authorized-verifier (verifier principal))
   (begin
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-authorized-verifier verifier)) ERR-INVALID-INPUT)
     (map-set authorized-verifiers verifier true)
     (print { event: "verifier-added", verifier: verifier })
     (ok true)
@@ -311,6 +352,7 @@
 (define-public (remove-authorized-verifier (verifier principal))
   (begin
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-authorized-verifier verifier) ERR-INVALID-INPUT)
     (map-delete authorized-verifiers verifier)
     (print { event: "verifier-removed", verifier: verifier })
     (ok true)
@@ -321,6 +363,7 @@
 (define-public (transfer-contract-ownership (new-owner principal))
   (begin
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-eq new-owner (var-get contract-owner))) ERR-INVALID-INPUT)
     (var-set contract-owner new-owner)
     (print { event: "ownership-transferred", new-owner: new-owner })
     (ok true)
