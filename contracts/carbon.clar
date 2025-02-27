@@ -2,6 +2,9 @@
 ;; A contract for minting, trading, and retiring tokenized carbon credits
 ;; with automatic verification and transparent tracking
 
+;; Contract owner
+(define-data-var contract-owner principal tx-sender)
+
 (define-constant ERR-NOT-AUTHORIZED (err u100))
 (define-constant ERR-PROJECT-EXISTS (err u101))
 (define-constant ERR-PROJECT-NOT-FOUND (err u102))
@@ -75,7 +78,7 @@
   (total-credits uint))
   (let
     ((existing-project (map-get? projects { project-id: project-id })))
-    (asserts! (is-eq tx-sender contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
     (asserts! (is-none existing-project) ERR-PROJECT-EXISTS)
     (asserts! (> total-credits u0) ERR-INVALID-AMOUNT)
     (asserts! (< start-time end-time) ERR-INVALID-AMOUNT)
@@ -113,7 +116,7 @@
   (verification-report-url (string-ascii 128)))
   (let
     ((project (unwrap! (map-get? projects { project-id: project-id }) ERR-PROJECT-NOT-FOUND))
-     (current-time (unwrap! (get-block-info? time (- block-height u1)) u0)))
+     (current-time (default-to u0 (get-block-info? time (- block-height u1)))))
     
     (asserts! (is-authorized-verifier tx-sender) ERR-NOT-AUTHORIZED)
     (asserts! (>= current-time (get start-time project)) ERR-INVALID-VERIFICATION-DATA)
@@ -245,7 +248,7 @@
   (retirement-reason (string-utf8 128)))
   (let
     ((sender-balance (unwrap! (map-get? credit-balances { project-id: project-id, owner: tx-sender }) ERR-INSUFFICIENT-CREDITS))
-     (current-time (unwrap! (get-block-info? time (- block-height u1)) u0))
+     (current-time (default-to u0 (get-block-info? time (- block-height u1))))
      (existing-retirement (map-get? retired-credits { project-id: project-id, retirement-id: retirement-id })))
     
     (asserts! (is-none existing-retirement) ERR-CREDIT-ALREADY-RETIRED)
@@ -285,9 +288,6 @@
 )
 
 ;; Administrative functions
-
-;; Contract owner
-(define-data-var contract-owner principal tx-sender)
 
 ;; List of authorized verifiers
 (define-map authorized-verifiers principal bool)
